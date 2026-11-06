@@ -218,7 +218,7 @@ window.FIREBASE_CONFIG = {
 <script type="module">
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
 import { getAuth, signInWithEmailAndPassword, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
-import { getFirestore, collection, doc, setDoc, deleteDoc, onSnapshot } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+import { getFirestore, collection, doc, setDoc, updateDoc, onSnapshot } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 
 const $ = id => document.getElementById(id);
 function v(id){ return $(id).value.trim(); }
@@ -280,18 +280,25 @@ let items = [];
 function startData(){
   if (unsub) return;
   $("storageNote").textContent = "Las incidencias se guardan en Firebase y se actualizan en tiempo real.";
+  const espera = setTimeout(() => { $("list").innerHTML = '<div class="empty">' + SIN_DB + '</div>'; }, 12000);
   unsub = onSnapshot(col, snap => {
+    clearTimeout(espera);
     items = snap.docs.map(d => Object.assign({}, d.data(), { id: d.id }));
     render();
   }, e => {
-    console.error(e);
+    clearTimeout(espera); console.error(e);
     $("list").innerHTML = '<div class="empty">' + (e.code === "permission-denied"
       ? "Sin permiso para leer. Revisa las reglas de Firestore (ver README)."
       : "No se pudo cargar: " + (e.code || e.message)) + "</div>";
   });
 }
-async function saveItem(it){ await setDoc(doc(col, it.id), it); }
-async function removeItem(id){ await deleteDoc(doc(col, id)); }
+const SIN_DB = "Firebase no responde. ¿Creaste la base de datos en Firestore Database y publicaste las reglas?";
+function conTiempo(promesa, ms = 12000){
+  return Promise.race([promesa, new Promise((_, rej) => setTimeout(() => rej({ code: "timeout" }), ms))]);
+}
+async function saveItem(it){ await conTiempo(setDoc(doc(col, it.id), it)); }
+async function cambiarEstado(id, estado){ await conTiempo(updateDoc(doc(col, id), { estado, actualizado: Date.now() })); }
+
 
 // ---- Formulario ----
 async function doRegister(){
@@ -312,7 +319,7 @@ async function doRegister(){
     setTimeout(() => msg.textContent = "", 3000);
   } catch(e) {
     console.error(e); msg.style.color = "var(--alta)";
-    msg.textContent = e.code === "permission-denied" ? "Sin permiso para guardar. Revisa las reglas de Firestore." : "No se pudo guardar: " + (e.code || e.message);
+    msg.textContent = e.code === "permission-denied" ? "Sin permiso para guardar. Revisa las reglas de Firestore." : e.code === "timeout" ? SIN_DB : "No se pudo guardar: " + (e.code || e.message);
   }
   btn.disabled = false;
 }
@@ -364,17 +371,12 @@ function render(){
         <select data-id="${esc(x.id)}" class="chg">
           ${Object.entries(ESTADOS).map(([k,l])=>`<option value="${k}" ${k===x.estado?"selected":""}>${l}</option>`).join("")}
         </select>
-        <button class="del" data-id="${esc(x.id)}" data-confirm="0">Eliminar</button>
       </div>
     </div>`).join("");
 
-  el.querySelectorAll(".chg").forEach(s => s.addEventListener("change", async () => {
-    const it = items.find(i=>i.id===s.dataset.id); if(!it) return;
-    try { await saveItem(Object.assign({}, it, { estado: s.value, actualizado: Date.now() })); } catch(e){ console.error(e); }
-  }));
-  el.querySelectorAll(".del").forEach(b => b.addEventListener("click", async () => {
-    if (b.dataset.confirm !== "1") { b.dataset.confirm="1"; b.textContent="¿Seguro? Clic otra vez"; setTimeout(()=>{b.dataset.confirm="0"; b.textContent="Eliminar";},3000); return; }
-    try { await removeItem(b.dataset.id); } catch(e){ console.error(e); }
+  el.querySelectorAll(".chg").forEach(sel => sel.addEventListener("change", async () => {
+    try { await cambiarEstado(sel.dataset.id, sel.value); }
+    catch(e){ console.error(e); render(); $("formMsg").style.color = "var(--alta)"; $("formMsg").textContent = e.code === "timeout" ? SIN_DB : "No se pudo cambiar el estado."; }
   }));
 }
 </script>
